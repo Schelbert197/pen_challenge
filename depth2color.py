@@ -194,15 +194,29 @@ try:
         # Find the contours based on the mask
         contours, heirarchy = cv2.findContours(frame_threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        largest_contour_index = 0
-        largest_contour_area = 0
-        for idx,contour in enumerate(contours):
-            if cv2.contourArea(contour) > largest_contour_area:
-                largest_contour_area = cv2.contourArea(contour)
-                largest_contour_index = idx
+        if len(contours) > 0:
+            largest_contour_index = 0
+            largest_contour_area = 0
+            for idx,contour in enumerate(contours):
+                if cv2.contourArea(contour) > largest_contour_area:
+                    largest_contour_area = cv2.contourArea(contour)
+                    largest_contour_index = idx
+        
+            # Draw centroid
+            M = cv2.moments(contours[largest_contour_index])
 
-        # Draw the contours
-        cv2.drawContours(color_image, contours, largest_contour_index, (0, 255, 0), 2)
+            if M['m00'] > 0.00001:
+                cx = int(M['m10']/M['m00'])
+                cy = int(M['m01']/M['m00'])
+
+                # Change the color of the centroid based on depth
+                # print(depth_image[cy][cx])
+                D_value = (depth_image[cy][cx] -150)*0.6
+
+                cv2.circle(color_image, (cx, cy), 5, (0, D_value, 255-D_value), -1)
+
+            # Draw the contours
+            cv2.drawContours(color_image, contours, largest_contour_index, (0, 255, 0), 2)
 
         depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
         images = np.hstack((color_image, depth_colormap))
