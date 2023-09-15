@@ -9,13 +9,16 @@
 import pyrealsense2 as rs
 # Import Numpy for easy array manipulation
 import numpy as np
+import math
 # Import OpenCV for easy image rendering
 import cv2
 import argparse
 
-
 # Create a pipeline
 pipeline = rs.pipeline()
+
+# Create fifo pipeline entrance
+f = open("/tmp/myfifo", "w")
 
 # Create a config and configure the pipeline to stream
 #  different resolutions of color and depth streams
@@ -62,8 +65,29 @@ clipping_distance = clipping_distance_in_meters / depth_scale
 align_to = rs.stream.color
 align = rs.align(align_to)
 
+# Get intrinsics
+prfl = profile.get_stream(align_to)
+intr = prfl.as_video_stream_profile().get_intrinsics()
+
+
 ###########
 # threshold functions and values
+
+# Define Kalman filter matrices for smoother pen tracking
+fps = 30
+kalman = cv2.KalmanFilter(6, 3)
+kalman.measurementMatrix = np.array([
+    [1, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0]], np.float32)
+kalman.transitionMatrix = np.array([
+    [1, 0, 0, 1/fps, 0, 0],
+    [0, 1, 0, 0, 1/fps, 0],
+    [0, 0, 1, 0, 0, 1/fps],
+    [0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 0, 1],], np.float32)
+
 
 max_value = 255
 max_value_H = 320//2
@@ -142,93 +166,119 @@ cv2.createTrackbar(high_V_name, window_detection_name , high_V, max_value, on_hi
 
 
 # Streaming loop
-try:
-    while True:
-        # Get frameset of color and depth
-        frames = pipeline.wait_for_frames()
-        # frames.get_depth_frame() is a 640x360 depth image
+#try:
+while True:
+    # Get frameset of color and depth
+    frames = pipeline.wait_for_frames()
+    # frames.get_depth_frame() is a 640x360 depth image
 
-        # Align the depth frame to color frame
-        aligned_frames = align.process(frames)
+    # Align the depth frame to color frame
+    aligned_frames = align.process(frames)
 
-        # Get aligned frames
-        aligned_depth_frame = aligned_frames.get_depth_frame() # aligned_depth_frame is a 640x480 depth image
-        color_frame = aligned_frames.get_color_frame()
+    # Get aligned frames
+    aligned_depth_frame = aligned_frames.get_depth_frame() # aligned_depth_frame is a 640x480 depth image
+    color_frame = aligned_frames.get_color_frame()
 
-        # Validate that both frames are valid
-        if not aligned_depth_frame or not color_frame:
-            continue
+    # Validate that both frames are valid
+    if not aligned_depth_frame or not color_frame:
+        continue
 
-        depth_image = np.asanyarray(aligned_depth_frame.get_data())
-        color_image = np.asanyarray(color_frame.get_data())
+    depth_image = np.asanyarray(aligned_depth_frame.get_data())
+    color_image = np.asanyarray(color_frame.get_data())
 
-        # # Take each frame
-        # _, frame = pipeline.read()
+    # # Take each frame
+    # _, frame = pipeline.read()
 
 
 
-        # Remove background - Set pixels further than clipping_distance to grey
-        grey_color = 153
-        depth_image_3d = np.dstack((depth_image,depth_image,depth_image)) #depth image is 1 channel, color is 3 channels
-        bg_removed = np.where((depth_image_3d > clipping_distance) | (depth_image_3d <= 0), grey_color, color_image)
+    # Remove background - Set pixels further than clipping_distance to grey
+    grey_color = 153
+    depth_image_3d = np.dstack((depth_image,depth_image,depth_image)) #depth image is 1 channel, color is 3 channels
+    bg_removed = np.where((depth_image_3d > clipping_distance) | (depth_image_3d <= 0), grey_color, color_image)
 
-        # convert to HSV from BGR
-        hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
+    # convert to HSV from BGR
+    hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
 
-        # Define the range of purple in HSV
-        lower_purp = np.array([70, 50, 50])
-        upper_purp = np.array([180, 255, 255])
+    # Define the range of purple in HSV
+    lower_purp = np.array([70, 50, 50])
+    upper_purp = np.array([180, 255, 255])
 
-        # Threshold the HSV image to only get purple colors
-        mask = cv2.inRange(hsv, lower_purp, upper_purp)
+    # Threshold the HSV image to only get purple colors
+    mask = cv2.inRange(hsv, lower_purp, upper_purp)
 
-        # Bitwise and mask original image
-        #res = cv2.bitwise_and(color_image, color_image, mask=mask)
+    # Bitwise and mask original image
+    #res = cv2.bitwise_and(color_image, color_image, mask=mask)
 
-        frame_threshold = cv2.inRange(hsv, (low_H, low_S, low_V), (high_H, high_S, high_V))
+    frame_threshold = cv2.inRange(hsv, (low_H, low_S, low_V), (high_H, high_S, high_V))
 
-        # Render images:
-        #   depth align to color on left
-        #   depth on right
+    # Render images:
+    #   depth align to color on left
+    #   depth on right
 
-        # Find the contours based on the mask
-        contours, heirarchy = cv2.findContours(frame_threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    # Find the contours based on the mask
+    contours, heirarchy = cv2.findContours(frame_threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-        if len(contours) > 0:
-            largest_contour_index = 0
-            largest_contour_area = 0
-            for idx,contour in enumerate(contours):
-                if cv2.contourArea(contour) > largest_contour_area:
-                    largest_contour_area = cv2.contourArea(contour)
-                    largest_contour_index = idx
-        
-            # Draw centroid
-            M = cv2.moments(contours[largest_contour_index])
+    if len(contours) > 0:
+        largest_contour_index = 0
+        largest_contour_area = 0
+        for idx,contour in enumerate(contours):
+            if cv2.contourArea(contour) > largest_contour_area:
+                largest_contour_area = cv2.contourArea(contour)
+                largest_contour_index = idx
+    
+        # Draw centroid
+        M = cv2.moments(contours[largest_contour_index])
 
-            if M['m00'] > 0.00001:
-                cx = int(M['m10']/M['m00'])
-                cy = int(M['m01']/M['m00'])
+        if M['m00'] > 0.00001:
+            cx = int(M['m10']/M['m00'])
+            cy = int(M['m01']/M['m00'])
 
-                # Change the color of the centroid based on depth
-                # print(depth_image[cy][cx])
-                D_value = (depth_image[cy][cx] -150)*0.6
+            # Change the color of the centroid based on depth
+            # print(depth_image[cy][cx])
+            D_value = (depth_image[cy][cx] -150)*0.6
 
-                cv2.circle(color_image, (cx, cy), 5, (0, D_value, 255-D_value), -1)
+            cv2.circle(color_image, (cx, cy), 5, (0, D_value, 255-D_value), -1)
 
-            # Draw the contours
-            cv2.drawContours(color_image, contours, largest_contour_index, (0, 255, 0), 2)
+            # Create the point
+            point = rs.rs2_deproject_pixel_to_point(intr, [cx, cy], depth_image[cy][cx])
 
-        depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
-        images = np.hstack((color_image, depth_colormap))
+            # Filter the point
+            mp = np.array([[np.float32(point[0])], [np.float32(point[1])], [np.float32(point[2])]])
+            kalman.correct(mp)
+            tp = kalman.predict()
+            point = (float(tp[0]), float(tp[1]), float(tp[2]))
 
-        cv2.namedWindow('Align Example', cv2.WINDOW_NORMAL)
-        cv2.imshow('Align Example', images)
-        cv2.imshow('hsv', hsv)
-        cv2.imshow('Object Detection', frame_threshold)
-        key = cv2.waitKey(1)
-        # Press esc or 'q' to close the image window
-        if key & 0xFF == ord('q') or key == 27:
-            cv2.destroyAllWindows()
-            break
-finally:
-    pipeline.stop()
+            # Draw the point
+            if not math.isnan(point[0]) and not math.isnan(point[1]) and not math.isnan(point[2]):
+                text = f"({round(point[0])}, {round(point[1])}, {round(point[2])})"
+                color_image = cv2.putText(
+                    color_image,
+                    text,
+                    (cx-100, cy+30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.75,
+                    (255, 255, 100),
+                    2, cv2.LINE_AA
+                )
+                
+                # Write the new point to the fifo pipe
+                f.write(f"{point[0]},{point[1]},{point[2]}\n")
+                f.flush()
+
+        # Draw the contours
+        cv2.drawContours(color_image, contours, largest_contour_index, (0, 255, 0), 2)
+
+    depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+    images = np.hstack((color_image, depth_colormap, hsv))
+
+    cv2.namedWindow('Align Example', cv2.WINDOW_NORMAL)
+    cv2.imshow('Align Example', images)
+    # cv2.imshow('hsv', hsv)
+    # cv2.imshow('Object Detection', frame_threshold)
+    key = cv2.waitKey(1)
+    # Press esc or 'q' to close the image window
+    if key & 0xFF == ord('q') or key == 27:
+        cv2.destroyAllWindows()
+        break
+#finally:
+pipeline.stop()
