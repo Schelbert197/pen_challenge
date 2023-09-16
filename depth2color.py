@@ -1,16 +1,6 @@
-## License: Apache 2.0. See LICENSE file in root directory.
-## Copyright(c) 2017 Intel Corporation. All Rights Reserved.
-
-#####################################################
-##              Align Depth to Color               ##
-#####################################################
-
-# First import the library
 import pyrealsense2 as rs
-# Import Numpy for easy array manipulation
 import numpy as np
 import math
-# Import OpenCV for easy image rendering
 import cv2
 import argparse
 
@@ -69,10 +59,6 @@ align = rs.align(align_to)
 prfl = profile.get_stream(align_to)
 intr = prfl.as_video_stream_profile().get_intrinsics()
 
-
-###########
-# threshold functions and values
-
 # Define Kalman filter matrices for smoother pen tracking
 fps = 30
 kalman = cv2.KalmanFilter(6, 3)
@@ -88,15 +74,17 @@ kalman.transitionMatrix = np.array([
     [0, 0, 0, 0, 1, 0],
     [0, 0, 0, 0, 0, 1],], np.float32)
 
-
+###########
+# threshold functions and values
 max_value = 255
 max_value_H = 320//2
-low_H = 120
+low_H = 115
 low_S = 50
 low_V = 50
 high_H = max_value_H
 high_S = max_value
 high_V = max_value
+"""
 window_capture_name = 'Video Capture'
 window_detection_name = 'Object Detection'
 low_H_name = 'Low H'
@@ -163,7 +151,7 @@ cv2.createTrackbar(high_S_name, window_detection_name , high_S, max_value, on_hi
 cv2.createTrackbar(low_V_name, window_detection_name , low_V, max_value, on_low_V_thresh_trackbar)
 cv2.createTrackbar(high_V_name, window_detection_name , high_V, max_value, on_high_V_thresh_trackbar)
 ##########
-
+"""
 
 # Streaming loop
 #try:
@@ -186,11 +174,6 @@ while True:
     depth_image = np.asanyarray(aligned_depth_frame.get_data())
     color_image = np.asanyarray(color_frame.get_data())
 
-    # # Take each frame
-    # _, frame = pipeline.read()
-
-
-
     # Remove background - Set pixels further than clipping_distance to grey
     grey_color = 153
     depth_image_3d = np.dstack((depth_image,depth_image,depth_image)) #depth image is 1 channel, color is 3 channels
@@ -210,10 +193,6 @@ while True:
     #res = cv2.bitwise_and(color_image, color_image, mask=mask)
 
     frame_threshold = cv2.inRange(hsv, (low_H, low_S, low_V), (high_H, high_S, high_V))
-
-    # Render images:
-    #   depth align to color on left
-    #   depth on right
 
     # Find the contours based on the mask
     contours, heirarchy = cv2.findContours(frame_threshold, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -268,6 +247,8 @@ while True:
         # Draw the contours
         cv2.drawContours(color_image, contours, largest_contour_index, (0, 255, 0), 2)
 
+    # Render images:
+    #   depth align to color on left, depth on right
     depth_colormap = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
     images = np.hstack((color_image, depth_colormap, hsv))
 
